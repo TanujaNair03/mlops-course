@@ -101,3 +101,139 @@ jobs:
           echo "\`\`\`" >> report.md
 
           cml comment create --publish report.md
+name: Main
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - '**.py'
+      - '**.ipynb'
+      - 'requirements.txt'
+      - 'artifacts/**'
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:  # allow manual trigger
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  test_model:
+    runs-on: ubuntu-latest
+
+    steps:
+      # --- Checkout the repository ---
+      - uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      # --- Set up Python environment ---
+      - uses: actions/setup-python@v4
+        with:
+          python-version: "3.9"
+
+      # --- Set up CML (for commenting reports) ---
+      - uses: iterative/setup-cml@v2
+      
+      # --- Install dependencies ---
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+
+name: Main
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - '**.py'
+      - '**.ipynb'
+      - 'requirements.txt'
+      - 'artifacts/**'
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:  # allow manual trigger
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  test_model:
+    runs-on: ubuntu-latest
+
+    steps:
+      # --- Checkout the repository ---
+      - uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      # --- Set up Python environment ---
+      - uses: actions/setup-python@v4
+        with:
+          python-version: "3.9"
+
+      # --- Set up CML (for commenting reports) ---
+      - uses: iterative/setup-cml@v2
+      
+      # --- Install dependencies ---
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+
+      # --- Authenticate to GCP and configure DVC remote ---
+      - name: Setup DVC Remote
+        env:
+          GCP_BUCKET: "gs://mlops-course-lively-nimbus-473407-m9"
+          GCP_CREDENTIALS_JSON: ${{ secrets.GCP_CREDENTIALS_JSON }}
+        run: |
+          echo "$GCP_CREDENTIALS_JSON" > gcp-key.json
+          export GOOGLE_APPLICATION_CREDENTIALS=$(pwd)/gcp-key.json
+
+          # Configure DVC to use GCS with the service account
+          dvc remote modify gcs_remote credentialpath $GOOGLE_APPLICATION_CREDENTIALS || \
+          dvc remote add -d gcs_remote $GCP_BUCKET
+          dvc remote modify gcs_remote credentialpath $GOOGLE_APPLICATION_CREDENTIALS
+
+      # --- Pull data from DVC remote ---
+      - name: Pull data using DVC
+        run: |
+          dvc pull
+          ls -lh
+          
+      # --- Optional debug listing ---
+      - name: Debug workspace contents
+        run: |
+          echo "Listing repository contents recursively:"
+          ls -R
+
+      # --- Train model ---
+      - name: Train the model
+        run: |
+          echo "Training model..."
+          python train.py > main_output.txt 2>&1 || true
+          python fetch_from_mlflow.py >> main_output.txt 2>&1 || true
+          
+      # --- Create and publish CML report ---
+      - name: Create CML report
+        env:
+          REPO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "Creating CML report..."
+          echo "## Accuracy Output" > report.md
+          echo "\`\`\`" >> report.md
+          cat main_output.txt >> report.md
+          echo "\`\`\`" >> report.md
+
+          cml comment create --publish report.md
+
+
+
