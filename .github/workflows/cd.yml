@@ -19,6 +19,9 @@ env:
   NAMESPACE: default
 
 jobs:
+  # ------------------------------------
+  # --- PHASE 3 JOB (Already works) ---
+  # ------------------------------------
   deploy:
     name: Build, Push, and Deploy to GKE
     runs-on: ubuntu-latest
@@ -72,17 +75,75 @@ jobs:
             --region "${CLUSTER_LOCATION}" \
             --project "${PROJECT_ID}"
 
-      # 9. *** MODIFIED DEPLOYMENT STEP ***
+      # 9. Deploy to GKE
       - name: Deploy to GKE
         run: |
           echo "🔄 Deploying to GKE with image: ${{ env.IMAGE_URI }}"
-          
-          # Replace the "YOUR_IMAGE_URL" placeholder in your file
+
+          # Replace the placeholder in deployment.yml
           sed -i "s|YOUR_IMAGE_URL_PLACEHOLDER|${{ env.IMAGE_URI }}|g" deployment.yml
-          
+
           # Apply the deployment and service
           kubectl apply -f deployment.yml
-          
+
           # Wait for the rollout to finish
           echo "⏳ Waiting for rollout..."
           kubectl rollout status deployment/"$DEPLOYMENT_NAME" --namespace "$NAMESPACE" --timeout=5m
+
+  # ------------------------------------
+  # --- PHASE 4 JOB (New part) ---
+  # ------------------------------------
+  stress-test:
+    name: Stress Test Deployed API
+    needs: deploy # This job runs ONLY AFTER 'deploy' is successful
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Install wrk
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y wrk
+
+      - name: Authenticate to GCP (for kubectl)
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_CREDENTIALS_JSON }}
+
+      - name: Get GKE credentials
+        run: |
+          gcloud container clusters get-credentials "${{ env.CLUSTER_NAME }}" \
+            --region "${{ env.CLUSTER_LOCATION }}" \
+            --project "${{ env.PROJECT_ID }}"
+
+      - name: Wait for LoadBalancer IP
+        run: |
+          echo "⏳ Waiting for external IP..."
+          TIMEOUT=300 # 5 min timeout
+          START_TIME=$(date +%s)
+          while [ -z "$EXTERNAL_IP" ]; do
+            NOW=$(date +%s)
+            if [ $((NOW - START_TIME)) -gt $TIMEOUT ]; then
+              echo "❌ Error: Timed out waiting for external IP."
+              kubectl get services -n default
+              exit 1
+            fi
+            # This service name MUST match your deployment.yml
+            EXTERNAL_IP=$(kubectl get service mlops-api-service -n default -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+            [ -z "$EXTERNAL_IP" ] && echo "Still waiting..." && sleep 10
+          done
+          echo "✅ Got API IP: $EXTERNAL_IP"
+          echo "API_IP=$EXTERNAL_IP" >> $GITHUB_ENV
+
+      - name: Run 1000 request stress test
+        run: |
+          echo "🚀 Running 1000 request test..."
+          wrk -t12 -c1000 -d30s http://${{ env.API_IP }}/
+          echo "Watching pods..."
+          kubectl get pods -n default
+
+      - name: Run 2000 request stress test
+        run: |
+          echo "🚀 Running 2000 request test..."
+          wrk -t12 -c2000 -d30s http://${{ env.API_IP }}/
+          echo "Watching pods..."
+          kubectl get pods -n default
