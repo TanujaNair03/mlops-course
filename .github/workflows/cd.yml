@@ -4,18 +4,10 @@ on:
   push:
     branches: [ main ]
 
-env:
-  # --- CHECK THESE VALUES CAREFULLY ---
-  GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
-  GKE_CLUSTER: mlops-cluster
-  GKE_ZONE: us-central1-a # <-- CHANGE THIS if your cluster is in a different zone
-  AR_HOST: us-central1-docker.pkg.dev # <-- CHANGE THIS if your registry is in a different region
-  AR_REPO: mlops-repo
-  # ------------------------------------
-
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
+    
     steps:
     - uses: actions/checkout@v3
     
@@ -24,32 +16,33 @@ jobs:
       with:
         credentials_json: ${{ secrets.GCP_SERVICE_ACCOUNT_KEY }}
     
-    - name: Build and Push Docker Image
+    - name: Build, Push, and Deploy
       run: |
-        gcloud auth configure-docker $AR_HOST
-        
-        # --- DEBUG LINES TO FIND THE ERROR ---
-        echo "--- DEBUGGING VARIABLES ---"
-        echo "GCP_PROJECT_ID is: $GCP_PROJECT_ID"
-        echo "AR_HOST is: $AR_HOST"
-        echo "AR_REPO is: $AR_REPO"
-        echo "GITHUB_SHA is: ${GITHUB_SHA}"
-        echo "---------------------------"
+        # --- HARDCODE YOUR 4 VALUES HERE ---
+        export GCP_PROJECT_ID="flowing-subset-444209-c9" # 1. PASTE YOUR PROJECT ID
+        export GKE_CLUSTER="mlops-cluster"
+        export GKE_ZONE="us-central1-a"                 # 2. PASTE YOUR GKE ZONE
+        export AR_HOST="us-central1-docker.pkg.dev"    # 3. PASTE YOUR AR HOST
+        export AR_REPO="mlops-repo"                      # 4. PASTE YOUR AR REPO NAME
         # ------------------------------------
-        
-        # Create the full image URL
+
+        echo "--- STARTING DEPLOYMENT ---"
+
+        # 1. Authenticate Docker
+        gcloud auth configure-docker $AR_HOST
+
+        # 2. Build and Push Docker Image
         export IMAGE_URL="$AR_HOST/$GCP_PROJECT_ID/$AR_REPO:${GITHUB_SHA}"
-        
-        echo "Final IMAGE_URL is: $IMAGE_URL"
-        
+        echo "Building and pushing to: $IMAGE_URL"
         docker build -t $IMAGE_URL .
         docker push $IMAGE_URL
-    
-    - name: Deploy to GKE
-      run: |
+
+        # 3. Deploy to GKE
+        echo "Deploying to GKE cluster: $GKE_CLUSTER"
         gcloud container clusters get-credentials $GKE_CLUSTER --zone $GKE_ZONE
         
         # Replace the placeholder in the deployment file
-        sed -i "s|YOUR_IMAGE_URL|${{ env.IMAGE_URL }}|g" deployment.yml
+        sed -i "s|YOUR_IMAGE_URL|$IMAGE_URL|g" deployment.yml
         
         kubectl apply -f deployment.yml
+        echo "--- DEPLOYMENT COMPLETE ---"
