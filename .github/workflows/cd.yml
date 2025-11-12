@@ -1,48 +1,88 @@
-name: CD-Pipeline (Phase 3)
+name: CD - Deploy API to GKE
 
 on:
   push:
-    branches: [ main ]
+    branches:
+      - main
+  workflow_dispatch:
+
+# These env vars will pull from the Secrets you just created
+env:
+  PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+  GAR_LOCATION: us-central1 # Your AR Region
+  REPOSITORY: ${{ secrets.GAR_REPO }}
+  IMAGE: iris-api
+  CLUSTER_NAME: ${{ secrets.GKE_CLUSTER }}
+  CLUSTER_LOCATION: ${{ secrets.GKE_LOCATION }} # Your GKE Zone
+  # This must match the name in your deployment.yml
+  DEPLOYMENT_NAME: mlops-api-deployment 
+  NAMESPACE: default
 
 jobs:
-  build-and-deploy:
+  deploy:
+    name: Build, Push, and Deploy to GKE
     runs-on: ubuntu-latest
-    
+
     steps:
-    - uses: actions/checkout@v3
-    
-    - name: Authenticate to GCP
-      uses: google-github-actions/auth@v1
-      with:
-        credentials_json: ${{ secrets.GCP_SERVICE_ACCOUNT_KEY }}
-    
-    - name: Build, Push, and Deploy
-      run: |
-        # --- HARDCODE YOUR 4 VALUES HERE ---
-        export GCP_PROJECT_ID="flowing-subset-444209-c9" # 1. PASTE YOUR PROJECT ID
-        export GKE_CLUSTER="mlops-cluster"
-        export GKE_ZONE="us-central1-a"                 # 2. PASTE YOUR GKE ZONE
-        export AR_HOST="us-central1-docker.pkg.dev"    # 3. PASTE YOUR AR HOST
-        export AR_REPO="mlops-repo"                      # 4. PASTE YOUR AR REPO NAME
-        # ------------------------------------
+      # 1. Checkout repository
+      - name: Checkout
+        uses: actions/checkout@v4
 
-        echo "--- STARTING DEPLOYMENT ---"
+      # 2. Authenticate to Google Cloud
+      - name: Authenticate Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_CREDENTIALS_JSON }}
 
-        # 1. Authenticate Docker
-        gcloud auth configure-docker $AR_HOST
+      # 3. Configure gcloud CLI
+      - name: Configure gcloud CLI
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+          export_default_credentials: true
 
-        # 2. Build and Push Docker Image
-        export IMAGE_URL="$AR_HOST/$GCP_PROJECT_ID/$AR_REPO:${GITHUB_SHA}"
-        echo "Building and pushing to: $IMAGE_URL"
-        docker build -t $IMAGE_URL .
-        docker push $IMAGE_URL
+      # 4. Install GKE Auth Plugin
+      - name: Install GKE Auth Plugin
+        run: gcloud components install gke-gcloud-auth-plugin --quiet
 
-        # 3. Deploy to GKE
-        echo "Deploying to GKE cluster: $GKE_CLUSTER"
-        gcloud container clusters get-credentials $GKE_CLUSTER --zone $GKE_ZONE
-        
-        # Replace the placeholder in the deployment file
-        sed -i "s|YOUR_IMAGE_URL|$IMAGE_URL|g" deployment.yml
-        
-        kubectl apply -f deployment.yml
-        echo "--- DEPLOYMENT COMPLETE ---"
+      # 5. Configure Docker for Artifact Registry
+      - name: Configure Docker auth for Artifact Registry
+        run: gcloud auth configure-docker ${GAR_LOCATION}-docker.pkg.dev --quiet
+
+      # 6. Build Docker image
+      - name: Build Docker image
+        run: |
+          # Use GITHUB_SHA to create a unique tag
+          export IMAGE_URI="${GAR_LOCATION}-docker.pkg.dev/${PROJECT_ID}/${REPOSITORY}/${IMAGE}:${GITHUB_SHA}"
+          echo "📦 Building image: $IMAGE_URI"
+          docker build -t "$IMAGE_URI" .
+          # Pass this full URI to the next step
+          echo "IMAGE_URI=$IMAGE_URI" >> $GITHUB_ENV
+
+      # 7. Push Docker image to Artifact Registry
+      - name: Push Docker image
+        run: |
+          echo "🚀 Pushing image: ${{ env.IMAGE_URI }}"
+          docker push "${{ env.IMAGE_URI }}"
+
+      # 8. Get GKE credentials
+      - name: Get GKE credentials
+        run: |
+          gcloud container clusters get-credentials "${CLUSTER_NAME}" \
+            --region "${CLUSTER_LOCATION}" \
+            --project "${PROJECT_ID}"
+
+      # 9. *** MODIFIED DEPLOYMENT STEP ***
+      - name: Deploy to GKE
+        run: |
+          echo "🔄 Deploying to GKE with image: ${{ env.IMAGE_URI }}"
+          
+          # Replace the "YOUR_IMAGE_URL" placeholder in your file
+          sed -i "s|YOUR_IMAGE_URL_PLACEHOLDER|${{ env.IMAGE_URI }}|g" deployment.yml
+          
+          # Apply the deployment and service
+          kubectl apply -f deployment.yml
+          
+          # Wait for the rollout to finish
+          echo "⏳ Waiting for rollout..."
+          kubectl rollout status deployment/"$DEPLOYMENT_NAME" --namespace "$NAMESPACE" --timeout=5m
