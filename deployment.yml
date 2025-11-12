@@ -14,7 +14,7 @@ spec:
     spec:
       containers:
       - name: mlops-api-container
-        image: YOUR_IMAGE_URL # Placeholder
+        image: YOUR_IMAGE_URL_PLACEHOLDER
         ports:
         - containerPort: 8080
 ---
