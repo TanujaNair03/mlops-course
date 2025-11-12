@@ -1,0 +1,31 @@
+name: CD-Pipeline (Phase 3)
+on:
+  push:
+    branches: [ main ]
+env:
+  GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+  GKE_CLUSTER: mlops-cluster
+  GKE_ZONE: us-central1-a # <-- CHANGE THIS to your cluster's zone
+  AR_HOST: us-central1-docker.pkg.dev # <-- CHANGE THIS to your registry's location
+  AR_REPO: mlops-repo
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+    - name: Authenticate to GCP
+      uses: google-github-actions/auth@v1
+      with:
+        credentials_json: ${{ secrets.GCP_SERVICE_ACCOUNT_KEY }}
+    - name: Build and Push Docker Image
+      run: |
+        gcloud auth configure-docker $AR_HOST
+        export IMAGE_URL="$AR_HOST/$GCP_PROJECT_ID/$AR_REPO:${GITHUB_SHA}"
+        echo "IMAGE_URL=$IMAGE_URL" >> $GITHUB_ENV
+        docker build -t $IMAGE_URL .
+        docker push $IMAGE_URL
+    - name: Deploy to GKE
+      run: |
+        gcloud container clusters get-credentials $GKE_CLUSTER --zone $GKE_ZONE
+        sed -i "s|YOUR_IMAGE_URL|${{ env.IMAGE_URL }}|g" deployment.yml
+        kubectl apply -f deployment.yml
