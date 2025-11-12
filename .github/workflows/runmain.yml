@@ -1,6 +1,9 @@
 name: Main
 
 on:
+  # Trigger on push to main or pull request to main
+  # Note: The 'paths' filter means changes to the workflow file itself won't trigger the run.
+  # You must make a dummy change to a .py file to re-run the workflow.
   push:
     branches:
       - main
@@ -42,38 +45,25 @@ jobs:
         run: |
           pip install -r requirements.txt
 
-      # --- Authenticate to GCP and configure DVC remote ---
-      - name: Setup DVC Remote
-        env:
-          GCP_BUCKET: "gs://mlops-course-lively-nimbus-473407-m9"
-          GCP_CREDENTIALS_JSON: ${{ secrets.GCP_CREDENTIALS_JSON }}
+      # --- DOWNLOAD DATA DIRECTLY (Replaces DVC Pull) ---
+      - name: Download Data Directly
         run: |
-          echo "$GCP_CREDENTIALS_JSON" > gcp-key.json
-          export GOOGLE_APPLICATION_CREDENTIALS=$(pwd)/gcp-key.json
-
-          # Configure DVC to use GCS with the service account
-          dvc remote modify gcs_remote credentialpath $GOOGLE_APPLICATION_CREDENTIALS || \
-          dvc remote add -d gcs_remote $GCP_BUCKET
-          dvc remote modify gcs_remote credentialpath $GOOGLE_APPLICATION_CREDENTIALS
-
-      # --- Pull data from DVC remote ---
-      - name: Pull data using DVC
-        run: |
-          dvc pull
+          echo "Bypassing DVC and downloading data directly..."
+          # The adapted data URL
+          wget -O data.csv https://raw.githubusercontent.com/IITMBSMLOps/ga_resources/week_3/iris_data_adapted_for_feast.csv
           ls -lh
-          
-      # --- Optional debug listing ---
-      - name: Debug workspace contents
-        run: |
-          echo "Listing repository contents recursively:"
-          ls -R
 
-      # --- Train model ---
-      - name: Train the model
+      # --- Train model and run tests (Combined step) ---
+      # This step should now succeed as data.csv is present
+      - name: Train and Test Model
         run: |
           echo "Training model..."
-          python train.py > main_output.txt 2>&1 || true
-          python fetch_from_mlflow.py >> main_output.txt 2>&1 || true
+          # Run the main training script. Output is redirected to main_output.txt
+          python train.py > main_output.txt 2>&1
+          
+          echo "Running tests..."
+          # Run the test script (assumes it runs after the model is logged by train.py)
+          pytest test_model.py >> main_output.txt 2>&1
           
       # --- Create and publish CML report ---
       - name: Create CML report
@@ -81,11 +71,9 @@ jobs:
           REPO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           echo "Creating CML report..."
-          echo "## Accuracy Output" > report.md
+          echo "## CI/CD Pipeline Results" > report.md
           echo "\`\`\`" >> report.md
           cat main_output.txt >> report.md
           echo "\`\`\`" >> report.md
 
           cml comment create --publish report.md
-
-
