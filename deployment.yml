@@ -17,6 +17,10 @@ spec:
         image: YOUR_IMAGE_URL_PLACEHOLDER
         ports:
         - containerPort: 8080
+        resources:
+          requests:
+            cpu: "100m" # Request 10% of a CPU
+            memory: "128Mi"
 ---
 apiVersion: v1
 kind: Service
